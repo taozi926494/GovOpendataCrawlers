@@ -67,7 +67,7 @@ target/
 # IMMonitor/static/wxmsg/image/*.gif
 
 # idea cache
-.idea
+.idea/
 
 # download files
-GuiYangOpendata/files/
+files/

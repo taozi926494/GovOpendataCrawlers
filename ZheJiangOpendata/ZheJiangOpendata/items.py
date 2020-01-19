@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
-from .util.field_cleaning import *
+
+# Define here the models for your scraped items
+#
+# See documentation in:
+# https://doc.scrapy.org/en/latest/topics/items.html
+
 import scrapy
 
 
-class FileItem(scrapy.Item):
-    # 文件url
-    url = scrapy.Field(output_processor=coommon_cleaning)
-    # 文件名
-    file_name = scrapy.Field(output_processor=coommon_cleaning)
-    # 文件标签
-    file_label = scrapy.Field(output_processor=coommon_cleaning)
-    # 文件类型
-    file_type = scrapy.Field(output_processor=coommon_cleaning)
-    # 文件大小单位kb
-    file_size = scrapy.Field(output_processor=coommon_cleaning)
-    # 文件内容
-    file_content = scrapy.Field(output_processor=coommon_cleaning)
+class FileDownloadItem(scrapy.Item):
+    file_urls = scrapy.Field()
+    formdata = scrapy.Field()
+    metadata = scrapy.Field()
+

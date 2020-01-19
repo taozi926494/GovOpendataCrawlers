@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
-import scrapy
-from scrapy.loader import ItemLoader
-from ..items import FileItem
-import base64
-import re
-from lxml import etree
-from ..util.common import unify_url, date2timestamp
-import time
-import logging
 import json
+import re
+import logging
+import scrapy
+from scrapy import Request, FormRequest
+from ..items import FileDownloadItem
+from ..utils.LastCrawl import LastCrawl
+from ..utils.FileSummary import FilesSummary
+from lxml import etree
+from ..utils import toolkit
+import time
 
 
-class ZjSpider(scrapy.Spider):
-    # 爬虫名
-    name = 'zj'
-    header = {
+class MasterSpider(scrapy.Spider):
+    name = 'master'
+    last_crawl_time = 0
+    headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
         "Accept-Encoding": "gzip, deflate",
         " Accept-Language": "zh-CN,zh;q=0.9",
@@ -27,26 +28,19 @@ class ZjSpider(scrapy.Spider):
     }
     cookies = {
         "visited": "1",
-        "ZJZWFWSESSIONID": "de67be4a-ca3f-4a9e-963f-3a35208492ed",
+        "ZJZWFWSESSIONID": "54810346-b412-40a3-a2af-5bcb18d8298e",
         "zjzwfwlogin": "demo_",
-        "SERVERID": "6943c432294a088664f7a77dc414f853|{}|1579329132".format(int(time.time()))
+        "SERVERID": "6943c432294a088664f7a77dc414f853|{}|1579401737".format(int(time.time()))
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        with open('ZheJiangOpendata/util/crawllog.json', 'r') as f:
-            temp = json.load(f)
-        # 判断是否为首次爬取， 如果temp中没有时间记录，则为首次爬取
-        if temp.get('last_date') == "":
-            # 首次爬去的标志位
-            self.first_crawl = True
-            # 上次的采集时间，如果为空，则设置为指定初始值
-            self.last_crawl_date = date2timestamp('2019-01-01')
-        else:
-            self.first_crawl = False
-            self.last_crawl_date = date2timestamp(temp.get('last_date'))
+        # 上次的采集时间，如果为1483200000（2017-01-1），则设置为指定初始值， 表示首次采集
+        self.last_crawl_date = LastCrawl.crawl_time()
+        # 首次爬去的标志位
+        self.first_crawl = True if self.last_crawl_date == 1483200000 else False
 
-    def start_requests(self):
+    def start_requests(self) -> 'Request':
         url = 'http://data.zjzwfw.gov.cn/jdop_front/channal/datapubliclist.do'
         formdata = {
             "pageNumber": "1",
@@ -62,12 +56,12 @@ class ZjSpider(scrapy.Spider):
             yield scrapy.FormRequest(
                 url=url,
                 formdata=formdata,
-                headers=self.header,
+                headers=self.headers,
                 cookies=self.cookies,
-                callback=self.only_unstructured_parse
+                callback=self.parse_list
             )
 
-    def only_unstructured_parse(self, response):
+    def parse_list(self, response)-> 'FileDownloadItem':
         """
         解析详情页, 采集数据仅有非结构化类型数据
         :param response: 请求详情页后返回的 response
@@ -93,7 +87,7 @@ class ZjSpider(scrapy.Spider):
             else:
                 update = update[0]
             # 将日期格式转换为时间戳
-            update_timestamp = date2timestamp(update)
+            update_timestamp = toolkit.date_to_stamp(update)
             # 如果数据的更新时间大于上次的爬取时间， 则表示数据为新更数据， 需要爬取
             if update_timestamp > self.last_crawl_date:
                 # 如果为首次爬取，然后进入详情页进行下载， 详情页中存在历史数据，否则直接在列表页下载最新数据
@@ -107,15 +101,15 @@ class ZjSpider(scrapy.Spider):
                     if not url:
                         continue
                     # 将提取的url转换为绝对路径
-                    attachment_url = unify_url(response, url)
+                    attachment_url = toolkit.unify_url(response, url)
                     # 更新时间cookies的时间参数， token的有效时间为180s
                     self.cookies['SERVERID'] = "6943c432294a088664f7a77dc414f853|{}|1579246656".format(int(time.time()))
                     # 请求详情页
                     yield scrapy.Request(
                         url=attachment_url,
-                        headers=self.header,
+                        headers=self.headers,
                         cookies=self.cookies,
-                        callback=self.parse_detail
+                        callback=self.parse_dataset
                     )
                 else:
                     logging.info('在列表页进行数据下载，非首次采集！')
@@ -124,29 +118,27 @@ class ZjSpider(scrapy.Spider):
                     file_name = file_name[0] if file_name else None
                     if not file_name:
                         continue
-                    # 由于一个数据有多种格式，需要将所有数据保存在文件夹下，故以文件名作为文件夹，路径拼接
-                    relative_path = '/'.join([file_name, file_name])
-                    # 文件类型
-                    file_type = re.findall(r'fileType=(.+)&', url)[0]
                     # 提取url
                     attachment_urls = item.xpath('div/div/p[@class="search_result_left_stit1"]/a/@href')
                     for _url in attachment_urls:
-                        path = relative_path + str(int(time.time()*100000))+'.' + file_type
-                        url = unify_url(response, _url)
+                        url = toolkit.unify_url(response, _url)
                         # 更新时间cookies的时间参数， token的有效时间为180s
-                        self.cookies['SERVERID'] = "6943c432294a088664f7a77dc414f853|{}|1579246656".format(int(time.time()))
-                        yield scrapy.Request(
-                                url=url,
-                                headers=self.header,
-                                cookies=self.cookies,
-                                callback=self.attachment_parse,
-                                meta={"file_name": path}
-                        )
+                        self.cookies['SERVERID'] = "6943c432294a088664f7a77dc414f853|{}|1579246656".format(
+                            int(time.time()))
+                        file_download_item = FileDownloadItem()
+                        file_download_item['file_urls'] = [url]
+                        file_download_item['metadata'] = {
+                            "名称": file_name,
+                            "headers": self.headers,
+                            "cookies": self.cookies,
+                        }
+                        # yield 文件下载的item，到FilePipeline中去下载文件
+                        yield file_download_item
             else:
                 logging.info("后续数据的更新时间小于上次采集时间，数据已经采集过, 停止采集！")
                 return None
 
-    def parse_detail(self, response):
+    def parse_dataset(self, response) -> 'FileDownloadItem':
         """详情页的解析"""
         # 文件名
         file_name = response.xpath('//span[@class="sjxqTit1"]/text()').extract_first()
@@ -155,42 +147,29 @@ class ZjSpider(scrapy.Spider):
         # 遍历提取的所有文件url
         for _url in current_download:
             # 将文件的url的相对路径转换为绝对路径
-            url = unify_url(response, _url)
+            url = toolkit.unify_url(response, _url)
             # 由于一个数据有多种格式，需要将所有数据保存在文件夹下，故以文件名作为文件夹，路径拼接
             relative_path = '/'.join([file_name, file_name])
             # 文件格式
             file_type = re.findall(r'fileType=(.+?)&', url)[0]
             # 判断url是否为历史数据，
-            path = relative_path + str(int(time.time()*100000))+'.' + file_type
+            path = relative_path + str(int(time.time() * 100000)) + '.' + file_type
             # 更新时间cookies的时间参数， token的有效时间为180s
             self.cookies['SERVERID'] = "6943c432294a088664f7a77dc414f853|{}|1579246656".format(int(time.time()))
-            yield scrapy.Request(
-                url=url,
-                headers=self.header,
-                cookies=self.cookies,
-                callback=self.attachment_parse,
-                meta={"file_name": path}
-            )
+            if '&history=' in url:
+                _file_name = file_name+"/history"
+            else:
+                _file_name = file_name
+            file_download_item = FileDownloadItem()
+            file_download_item['file_urls'] = [url]
+            file_download_item['metadata'] = {
+                "名称": _file_name,
+                "headers": self.headers,
+                "cookies": self.cookies,
+            }
+            # yield 文件下载的item，到FilePipeline中去下载文件
+            yield file_download_item
 
-    def attachment_parse(self, response):
-        """
-        附件解析函数
-        :param response: 请求附件页面后返回的 response
-        :return:
-        """
-        # 实例化附件item
-        file_item = ItemLoader(item=FileItem())
-        # 计算附件的大小
-        file_size = int(len(response.body) / 1024)
-        # 将文件bytes类型进行base64 编码
-        file_content = base64.b64encode(response.body)
-        file_name = response.meta.get('file_name')
-        # 给附件item的各个字段赋值以及返回
-        file_item.add_value('url', response.url)
-        file_item.add_value('file_name', file_name)
-        file_item.add_value('file_label', 'sdsad')
-        file_item.add_value('file_type', 'file')
-        file_item.add_value('file_size', file_size)
-        file_item.add_value('file_content', file_content)
-        yield file_item.load_item()
-        logging.info('已经完成文件的：{}的下载'.format(file_name))
+
+
+
